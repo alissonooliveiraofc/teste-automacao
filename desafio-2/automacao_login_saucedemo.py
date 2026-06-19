@@ -8,7 +8,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
-from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.chrome import ChromeDriverManager
 
 
@@ -16,26 +15,38 @@ SITE_URL = "https://www.saucedemo.com"
 USERNAME = "standard_user"
 PASSWORD = "secret_sauce"
 
-# False por padrão (abre o navegador). No Docker, a variável HEADLESS=true é setada automaticamente.
 HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
+
+# Script JS que usa o setter nativo do React para forçar atualização do onChange
+REACT_SET_VALUE = """
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(arguments[0], arguments[1]);
+    arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+    arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+"""
 
 
 class TestSauceDemoFlow(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        chrome_options = Options()
+        options = Options()
 
         if HEADLESS:
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--disable-gpu")
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
 
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1920,1080")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("prefs", {
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+        })
 
         service = Service(ChromeDriverManager().install())
-        cls.driver = webdriver.Chrome(service=service, options=chrome_options)
+        cls.driver = webdriver.Chrome(service=service, options=options)
         cls.driver.implicitly_wait(10)
         cls.wait = WebDriverWait(cls.driver, 15)
 
@@ -50,9 +61,7 @@ class TestSauceDemoFlow(unittest.TestCase):
 
         self.driver.get(SITE_URL)
 
-        username_input = self.wait.until(
-            EC.presence_of_element_located((By.ID, "user-name"))
-        )
+        username_input = self.wait.until(EC.presence_of_element_located((By.ID, "user-name")))
         username_input.clear()
         username_input.send_keys(USERNAME)
 
@@ -70,16 +79,12 @@ class TestSauceDemoFlow(unittest.TestCase):
         print("\n🔧 Etapa 2: Aplicando filtro Price (low to high)...")
 
         sort_dropdown = self.wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "[data-test='product-sort-container']")
-            )
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='product-sort-container']"))
         )
         Select(sort_dropdown).select_by_value("lohi")
         time.sleep(1)
 
-        prices = self.driver.find_elements(
-            By.CSS_SELECTOR, "[data-test='inventory-item-price']"
-        )
+        prices = self.driver.find_elements(By.CSS_SELECTOR, "[data-test='inventory-item-price']")
         price_values = [float(p.text.replace("$", "")) for p in prices]
 
         self.assertEqual(price_values, sorted(price_values))
@@ -88,32 +93,26 @@ class TestSauceDemoFlow(unittest.TestCase):
     def test_03_add_to_cart(self):
         print("\n🛒 Etapa 3: Adicionando 3 produtos ao carrinho...")
 
+        items = self.driver.find_elements(By.CSS_SELECTOR, "[data-test='inventory-item']")
+        self.assertGreaterEqual(len(items), 3)
+
         products_added = []
 
         for i in range(3):
-            product_names = self.driver.find_elements(
-                By.CSS_SELECTOR, "[data-test='inventory-item-name']"
-            )
-            product_name = product_names[i].text if i < len(product_names) else f"Produto {i+1}"
+            item = items[i]
+            name = item.find_element(By.CSS_SELECTOR, "[data-test='inventory-item-name']").text
+            btn = item.find_element(By.CSS_SELECTOR, "button[data-test^='add-to-cart']")
 
-            add_buttons = self.driver.find_elements(
-                By.CSS_SELECTOR, "button[data-test^='add-to-cart']"
-            )
-            if not add_buttons:
-                break
-
-            self.driver.execute_script("arguments[0].scrollIntoView(true);", add_buttons[0])
-            time.sleep(0.4)
-            self.driver.execute_script("arguments[0].click();", add_buttons[0])
-            products_added.append(product_name)
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", btn)
+            time.sleep(0.3)
+            self.driver.execute_script("arguments[0].click();", btn)
+            products_added.append(name)
 
             badge = self.wait.until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "[data-test='shopping-cart-badge']")
-                )
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='shopping-cart-badge']"))
             )
             self.assertEqual(int(badge.text), i + 1)
-            print(f"   📦 [{i+1}/3] {product_name} — Badge: {badge.text}")
+            print(f"   📦 [{i+1}/3] {name} — Badge: {badge.text}")
 
         print(f"   ✅ {len(products_added)} produtos adicionados!")
 
@@ -121,42 +120,46 @@ class TestSauceDemoFlow(unittest.TestCase):
         print("\n💳 Etapa 4: Realizando checkout...")
 
         cart_link = self.wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "[data-test='shopping-cart-link']")
-            )
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='shopping-cart-link']"))
         )
         self.driver.execute_script("arguments[0].click();", cart_link)
         self.wait.until(EC.url_contains("/cart.html"))
 
-        cart_items = self.driver.find_elements(
-            By.CSS_SELECTOR, "[data-test='inventory-item']"
-        )
+        cart_items = self.driver.find_elements(By.CSS_SELECTOR, "[data-test='inventory-item']")
         self.assertEqual(len(cart_items), 3)
         print(f"   ✅ {len(cart_items)} itens no carrinho confirmados")
 
         checkout_button = self.wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='checkout']"))
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-test='checkout']"))
         )
         self.driver.execute_script("arguments[0].click();", checkout_button)
         self.wait.until(EC.url_contains("/checkout-step-one.html"))
 
         print("   📝 Preenchendo dados pessoais...")
-        time.sleep(1)
+        time.sleep(1.5)
 
-        for field_id, value in [("first-name", "Alisson"), ("last-name", "Oliveira"), ("postal-code", "01001-000")]:
+        for field_id, value in [
+            ("first-name", "Alisson"),
+            ("last-name", "Oliveira"),
+            ("postal-code", "01001000"),
+        ]:
             field = self.wait.until(EC.visibility_of_element_located((By.ID, field_id)))
-            self.driver.execute_script(
-                "arguments[0].value = ''; arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
-                field
-            )
-            field.click()
-            for char in value:
-                field.send_keys(char)
-                time.sleep(0.05)
 
+            # Setter nativo do React — única forma confiável de atualizar o estado interno
+            self.driver.execute_script(REACT_SET_VALUE, field, value)
+            time.sleep(0.5)
+
+            actual = field.get_attribute("value")
+            self.assertEqual(actual, value, f"Campo '{field_id}' ficou '{actual}' em vez de '{value}'")
+            print(f"   ✏️  {field_id}: {actual}")
+
+        time.sleep(0.5)
+        continue_btn = self.wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-test='continue']"))
+        )
+        self.driver.execute_script("arguments[0].scrollIntoView(true);", continue_btn)
         time.sleep(0.3)
-        continue_button = self.wait.until(EC.element_to_be_clickable((By.ID, "continue")))
-        continue_button.click()
+        self.driver.execute_script("arguments[0].click();", continue_btn)
 
         try:
             self.wait.until(EC.url_contains("/checkout-step-two.html"))
@@ -166,12 +169,11 @@ class TestSauceDemoFlow(unittest.TestCase):
                 print(f"   ❌ Erro no formulário: {errors[0].text}")
             raise e
 
-        print("   📋 Resumo do pedido:")
         total_label = self.driver.find_element(By.CSS_SELECTOR, "[data-test='total-label']")
-        print(f"   💰 {total_label.text}")
+        print(f"   📋 {total_label.text}")
 
         finish_button = self.wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='finish']"))
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-test='finish']"))
         )
         self.driver.execute_script("arguments[0].scrollIntoView(true);", finish_button)
         time.sleep(0.3)
@@ -182,7 +184,7 @@ class TestSauceDemoFlow(unittest.TestCase):
             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test='complete-header']"))
         )
         self.assertEqual(complete_header.text, "Thank you for your order!")
-        print("   ✅ Pedido finalizado!")
+        print("   ✅ Pedido finalizado com sucesso!")
 
     def test_05_logout(self):
         print("\n🚪 Etapa 5: Realizando logout...")

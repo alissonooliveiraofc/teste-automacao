@@ -1,0 +1,23 @@
+{
+  "first_name": "Alisson",
+  "last_name": "Oliveira",
+  "email": "alisson.oliveira@email.com",
+  "gender": "Male",
+  "mobile": "1199999888",
+  "date_of_birth": {
+    "day": "15",
+    "month": "March",
+    "year": "1995"
+  },
+  "subjects": [
+    "Maths",
+    "Computer Science"
+  ],
+  "hobbies": [
+    "Sports",
+    "Reading"
+  ],
+  "current_address": "Rua das Flores, 123 - São Paulo, SP",
+  "state": "NCR",
+  "city": "Delhi"
+}
